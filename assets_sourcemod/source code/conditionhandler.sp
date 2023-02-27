@@ -46,11 +46,26 @@ enum struct EffectProps {
 	int	iEffectWeapon; 	//weapon that caused effect
 }
 
+enum struct HealerStruct {
+	int	iHealerRef;
+	int	iWeaponRef;
+	float	flRate;
+}
+
 EffectProps	ePlayerConds[MAXPLAYERS+1][TFCC_LAST];
 int		iPlayerCondFlags[MAXPLAYERS+1][COND_BITFIELDS];
 
 //0 contains the index of the shield, 1 contains the material manager used for the damage effect
 int g_iAngelShields[MAXPLAYERS+1][2];
+float g_flLastDamagedShield[MAXPLAYERS+1];
+
+int g_iToxinEmitters[MAXPLAYERS+1] =		{ -1, ... };
+int g_iToxinUberEmitters[MAXPLAYERS+1] =	{ -1, ... };
+
+int g_iQuickFixEmitters[MAXPLAYERS+1] =		{ -1, ... };
+
+ArrayList g_aHealerList[MAXPLAYERS+1];
+int g_iRadialPatientEmitters[MAXPLAYERS+1] =	{ -1, ... };
 
 DynamicHook hTakeHealth;
 DynamicDetour hHealConds;
@@ -118,6 +133,8 @@ public void OnPluginStart() {
 	for( int i = 0; i < MAXPLAYERS+1; i++ ) {
 		g_iAngelShields[i][0] = -1;
 		g_iAngelShields[i][1] = -1;
+
+		g_aHealerList[i] = new ArrayList( sizeof( HealerStruct ) );
 	}
 
 	if( !bLateLoad )
@@ -242,6 +259,9 @@ bool AddCond( int iPlayer, int iCond ) {
 	case TFCC_TOXINUBER: {
 		bGaveCond = AddToxinUber( iPlayer );
 	}
+	case TFCC_RADIUSHEAL: {
+		bGaveCond = AddRadialHeal( iPlayer );
+	}
 	}
 
 	if( bGaveCond ) {
@@ -300,6 +320,9 @@ bool RemoveCond( int iPlayer, int iCond ) {
 	}
 	case TFCC_TOXINUBER: {
 		RemoveToxinUber( iPlayer );
+	}
+	case TFCC_RADIUSHEAL: {
+		RemoveRadialHeal( iPlayer );
 	}
 	}
 
@@ -556,12 +579,11 @@ void CheckOnKillCond( int iAttacker, int iWeapon ) {
 	TOXIN
 */
 
-static char szToxinParticle[] = "toxin_particles";
-int g_iToxinEmitters[MAXPLAYERS+1] = { -1, ... };
+#define TOXIN_PARTICLE		"toxin_particles"
 
-const float	TOXIN_FREQUENCY		= 0.5; //tick interval in seconds
-const float	TOXIN_DAMAGE		= 2.0; //damage per tick
-const float	TOXIN_HEALING_MULT	= 0.5; //multiplier for healing while under toxin
+#define	TOXIN_FREQUENCY		= 0.5 //tick interval in seconds
+#define TOXIN_DAMAGE		= 2.0; //damage per tick
+#define TOXIN_HEALING_MULT	= 0.5; //multiplier for healing while under toxin
 
 bool AddToxin( int iPlayer ) {
 	ePlayerConds[iPlayer][TFCC_TOXIN].hTick = CreateTimer( TOXIN_FREQUENCY, TickToxin, iPlayer, TIMER_FLAG_NO_MAPCHANGE );
@@ -573,7 +595,7 @@ bool AddToxin( int iPlayer ) {
 
 	//int iTeam = GetEntProp( iPlayer, Prop_Send, "m_iTeamNum" ) - 2;
 	int iEmitter = CreateEntityByName( "info_particle_system" );
-	DispatchKeyValue( iEmitter, "effect_name", szToxinParticle );
+	DispatchKeyValue( iEmitter, "effect_name", TOXIN_PARTICLE );
 
 	float vecPos[3]; GetClientAbsOrigin( iPlayer, vecPos );
 	TeleportEntity( iEmitter, vecPos );
@@ -674,8 +696,6 @@ static char szToxinUberParticles[][] = {
 	"biowastepump_uber_yellow"
 };
 
-int g_iToxinUberEmitters[MAXPLAYERS+1] = { -1, ... };
-
 bool AddToxinUber( int iPlayer ) {
 	RemoveToxinUberEmitter( iPlayer );
 	ePlayerConds[iPlayer][TFCC_TOXINUBER].hTick = CreateTimer( TOXINUBER_PULSERATE, TickToxinUber, iPlayer, TIMER_FLAG_NO_MAPCHANGE | TIMER_REPEAT );
@@ -766,10 +786,8 @@ Action TickToxinPatient( Handle hTimer, int iPlayer ) {
 	ANGEL SHIELD
 */
 
-const int ANGSHIELD_HEALTH = 100;
-const float ANGSHIELD_DURATION = 2.0;
-
-float g_flLastDamagedShield[MAXPLAYERS+1];
+#define ANGSHIELD_HEALTH 100
+#define ANGSHIELD_DURATION 2.0
 
 static char szShieldMats[][] = {
 	"models/effects/resist_shield/resist_shield",
@@ -783,6 +801,13 @@ static char szShieldOverlays[][] = {
 	"effects/invuln_overlay_blue",
 	"effects/invuln_overlay_green",
 	"effects/invuln_overlay_yellow"
+};
+
+static char szShieldKillParticle[][] = {
+	"angel_shieldbreak_red",
+	"angel_shieldbreak_blue",
+	"angel_shieldbreak_green",
+	"angel_shieldbreak_yellow"
 };
 
 int GetAngelShield( int iPlayer, int iType ) {
@@ -874,13 +899,6 @@ void RemoveAngelShield( int iPlayer ) {
 	g_iAngelShields[iPlayer][0] = -1;
 	g_iAngelShields[iPlayer][1] = -1;
 }
-
-static char szShieldKillParticle[][] = {
-	"angel_shieldbreak_red",
-	"angel_shieldbreak_blue",
-	"angel_shieldbreak_green",
-	"angel_shieldbreak_yellow"
-};
 
 Action RemoveAngelShield2( Handle hTimer, int iPlayer ) {
 	EmitSoundToAll( "weapons/teleporter_explode.wav", iPlayer );
@@ -992,7 +1010,7 @@ Action Hook_NewShield( int iEntity, int iClient ) {
 	ANGEL SHIELD INVULN
 */
 
-const float ANGINVULN_DURATION = 0.5;
+#define ANGINVULN_DURATION 0.5
 
 bool AddAngelInvuln( int iPlayer ) {
 	ePlayerConds[iPlayer][TFCC_ANGELINVULN].hTick = CreateTimer( ANGINVULN_DURATION, ExpireAngelInvuln, iPlayer, TIMER_FLAG_NO_MAPCHANGE );
@@ -1003,9 +1021,6 @@ Action ExpireAngelInvuln( Handle hTimer, int iPlayer ) {
 
 	return Plugin_Stop;
 }
-/*void RemoveAngelInvuln( int iPlayer ) {
-
-}*/
 
 void AngelInvulnTakeDamage( int iTarget ) {
 	TF2_AddCondition( iTarget, TFCond_UberchargedOnTakeDamage, 0.1 );
@@ -1018,15 +1033,6 @@ void AngelInvulnTakeDamagePost( int iTarget ) {
 	QUICK FIX UBER
 */
 
-int g_iQuickFixEmitters[MAXPLAYERS+1] = { -1, ... };
-void RemoveQuickFixEmitter( int iPlayer ) {
-	int iEmitter = EntRefToEntIndex( g_iQuickFixEmitters[iPlayer] );
-	if( iEmitter != -1 ) {
-		RemoveEntity( iEmitter );
-	}
-	g_iQuickFixEmitters[iPlayer] = -1;
-}
-
 static char g_szQFixParticle[][] = {
 	"quickfix_pulse_red",
 	"quickfix_pulse_blue",
@@ -1035,6 +1041,14 @@ static char g_szQFixParticle[][] = {
 };
 
 #define QUICKUBER_SELFHEAL_INTERVAL 0.1
+
+void RemoveQuickFixEmitter( int iPlayer ) {
+	int iEmitter = EntRefToEntIndex( g_iQuickFixEmitters[iPlayer] );
+	if( iEmitter != -1 ) {
+		RemoveEntity( iEmitter );
+	}
+	g_iQuickFixEmitters[iPlayer] = -1;
+}
 
 bool AddQuickUber( int iPlayer ) {
 	ePlayerConds[iPlayer][TFCC_QUICKUBER].hTick = CreateTimer( QUICKUBER_SELFHEAL_INTERVAL, TickQuickUber, iPlayer, TIMER_FLAG_NO_MAPCHANGE | TIMER_REPEAT );
@@ -1099,3 +1113,95 @@ void RemoveQuickUber( int iPlayer ) {
 /*
 	RADIAL HEAL
 */
+
+#define RADIALHEAL_TICKRATE 0.1
+
+bool AddRadialHeal( int iPlayer ) {
+	CreatePatientRadialParticles( iPlayer );
+	ePlayerConds[ iPlayer ][ TFCC_RADIUSHEAL ].hTick = CreateTimer( RADIALHEAL_TICKRATE, RadialHealTick, iPlayer );
+
+	return true;
+}
+
+Action RadialHealTick( Handle hTimer, int iPlayer ) {
+	ArrayList aList = g_aHealerList[ iPlayer ];
+	if( aList.Length == 0 ) {
+		RemoveCond( iPlayer, TFCC_RADIUSHEAL );
+		return Plugin_Stop;
+	}
+
+	float flRate = 0.0;
+	HealerStruct eHealer;
+	for( int i = 0; i <= aList.Length; i++ ) {
+		aList.GetArray( i, eHealer );
+		int iHealerIndex = EntRefToEntIndex( eHealer.iHealerRef );
+		if( iHealerIndex == -1 ) {
+			aList.Erase( i );
+			i -= 1;
+			continue;
+		}
+
+		float flGave = eHealer.flRate * ( 1 / ( i + 1 ) );
+		flRate += flGave;
+
+		Event eHealEvent = CreateEvent( "player_healed", true );
+		eHealEvent.SetInt( "patient", GetClientUserId( iPlayer ) );
+		eHealEvent.SetInt( "healer", GetClientUserId( iHealerIndex ) );
+		eHealEvent.SetInt( "amount", RoundToFloor( flGave ) );
+		eHealEvent.Fire();
+	}
+
+	HealPlayer( iPlayer, flRate * RADIALHEAL_TICKRATE, true );
+}
+
+void RemoveRadialHeal( int iPlayer ) {
+
+}
+
+void CreatePatientRadialParticles( int iPlayer ) {
+	RemovePatientRadialParticles( iPlayer );
+
+	int iDisguise = GetEntProp( iPlayer, Prop_Send, "m_nDisguiseTeam" );
+	int iTeam;
+	if( iDisguise != 0 )
+		iTeam = iDisguise - 2;
+	else
+		iTeam = GetEntProp( iPlayer, Prop_Send, "m_iTeamNum" ) - 2;
+
+	int iEmitter = CreateEntityByName( "info_particle_system" );
+
+	DispatchKeyValue( iEmitter, "effect_name", g_szOathHealParticles[ iTeam ] );
+
+	float vecPos[3]; GetClientAbsOrigin( iPlayer, vecPos );
+	TeleportEntity( iEmitter, vecPos );
+
+	ParentModel( iEmitter, iPlayer );
+
+	SetEntPropEnt( iEmitter, Prop_Send, "m_hOwnerEntity", iPlayer );
+
+	SetFlags(iEmitter);
+	SDKHook( iEmitter, SDKHook_SetTransmit, Hook_RadialParticle );
+
+	DispatchSpawn( iEmitter );
+	ActivateEntity( iEmitter );
+	AcceptEntityInput( iEmitter, "Start" );
+
+	g_iRadialPatientEmitters[ iPlayer ] = EntIndexToEntRef( iEmitter );
+}
+void RemovePatientRadialParticles( int iPlayer ) {
+	int iEmitter = EntRefToEntIndex( g_iRadialPatientEmitters[ iPlayer ] );
+	if( iEmitter != -1 )
+		RemoveEntity( iEmitter );
+
+	g_iRadialPatientEmitters[ iPlayer ] = -1;
+}
+
+Action Hook_RadialParticle( int iEntity, int iClient ) {
+	SetFlags( iEntity );
+	int iOwner = GetEntPropEnt( iEntity, Prop_Send, "m_hOwnerEntity" );
+
+	if( iClient == iOwner ) {
+		return Plugin_Handled;
+	}
+	return Plugin_Continue;
+}

@@ -521,11 +521,10 @@ int GetHealingMode( int iWeapon ) {
 */
 
 int GetDummyGun( int iPlayer ) {
-	return g_iDummyGuns[ iPlayer ];
+	return EntRefToEntIndex( g_iDummyGuns[ iPlayer ] );
 }
 int CreateDummyGun( int iPlayer, int iMedigun ) {
-	if( GetDummyGun( iPlayer ) != -1 )
-		DeleteDummyGun( iPlayer );
+	DeleteDummyGun( iPlayer );
 
 	int iDummyGun = CreateEntityByName( "prop_dynamic_override" );
 	static char szModelName[64];
@@ -539,13 +538,13 @@ int CreateDummyGun( int iPlayer, int iMedigun ) {
 	SetEntProp( iDummyGun, Prop_Send, "m_fEffects", 32|EF_BONEMERGE|EF_NOSHADOW|EF_NORECEIVESHADOW|EF_PARENT_ANIMATES);
 	ParentModel( iDummyGun, iMedigun, "weapon_bone_l" );
 
-	SetFlags(iDummyGun);
+	SetFlags( iDummyGun );
 
-	g_iDummyGuns[ iPlayer ] = iDummyGun;
+	g_iDummyGuns[ iPlayer ] = EntIndexToEntRef( iDummyGun );
 	return iDummyGun;
 }
 void DeleteDummyGun( int iPlayer ) {
-	int iDummyGun = g_iDummyGuns[ iPlayer ];
+	int iDummyGun = GetDummyGun( iPlayer );
 	if( IsValidEntity( iDummyGun ) ) {
 		RemoveEntity( iDummyGun );
 	}
@@ -559,18 +558,17 @@ void DeleteDummyGun( int iPlayer ) {
 */
 
 int GetBeamEmitter( int iPlayer, bool bClient ) { 
-	return g_iBeamEmitters[ iPlayer ][ view_as<int>(bClient) ];
+	return EntRefToEntIndex( g_iBeamEmitters[ iPlayer ][ view_as<int>(bClient) ] );
 }
 int CreateBeamEmitter( int iPlayer, bool bClient ) {
-	if( GetBeamEmitter( iPlayer, bClient ) != -1 )
-		DeleteBeamEmitter( iPlayer, bClient );
+	DeleteBeamEmitter( iPlayer, bClient );
 
 	int iEmitter = CreateEntityByName( "info_particle_system" );
 	
-	g_iBeamEmitters[ iPlayer ][ view_as<int>(bClient) ] = iEmitter;
-	SetBeamParticle( iPlayer, bClient );
+	g_iBeamEmitters[ iPlayer ][ view_as<int>(bClient) ] = EntIndexToEntRef( iEmitter );
+	SetBeamParticle( iPlayer, bClient, iEmitter );
 
-	SetFlags(iEmitter);
+	SetFlags( iEmitter );
 	SDKHook( iEmitter, SDKHook_SetTransmit, Hook_EmitterTransmit );
 
 	DispatchSpawn( iEmitter );
@@ -582,7 +580,7 @@ int CreateBeamEmitter( int iPlayer, bool bClient ) {
 	return iEmitter;
 }
 void DeleteBeamEmitter( int iPlayer, bool bClient ) {
-	int iEmitter = g_iBeamEmitters[ iPlayer ][ view_as<int>(bClient) ];
+	int iEmitter = GetBeamEmitter( iPlayer, bClient );
 	if( IsValidEntity( iEmitter ) ) {
 		SDKUnhook( iEmitter, SDKHook_SetTransmit, Hook_EmitterTransmit );
 		AcceptEntityInput( iEmitter, "Stop" );
@@ -590,7 +588,7 @@ void DeleteBeamEmitter( int iPlayer, bool bClient ) {
 	}
 	g_iBeamEmitters[ iPlayer ][ view_as<int>(bClient) ] = -1;
 }
-void SetBeamParticle( int iPlayer, bool bClient ) {
+void SetBeamParticle( int iPlayer, bool bClient, int iBeam ) {
 	static char szBeamName[64];
 	int iWeapon = GetEntityInSlot( iPlayer, 1 );
 	if( iWeapon == -1 )
@@ -601,7 +599,7 @@ void SetBeamParticle( int iPlayer, bool bClient ) {
 		return;
 
 	CreateMedibeamString( szBeamName, sizeof( szBeamName ), iWeapon );
-	DispatchKeyValue( GetBeamEmitter( iPlayer, bClient ), "effect_name", szBeamName );
+	DispatchKeyValue( iBeam, "effect_name", szBeamName );
 }
 
 Action Hook_EmitterTransmit( int iEntity, int iClient ) {
@@ -782,6 +780,9 @@ MRESReturn Detour_AllowedToHealPre( int iThis, DHookReturn hReturn, DHookParam h
 //just to bypass adding the medigun to the enemy's healer list
 MRESReturn Detour_HealStartPre( Address aThis, DHookParam hParams ) {
 	int iTarget = GetPlayerFromShared( aThis );
+	if( hParams.IsNull( 1 ) )
+		return MRES_Ignored;
+
 	int iHealer = hParams.Get( 1 );
 
 	if( ValidHealTarget( iHealer, iTarget ) )
@@ -909,7 +910,7 @@ void CreateRadialEmitter( int iPlayer ) {
 
 	SetEntPropEnt( iEmitter, Prop_Send, "m_hOwnerEntity", iPlayer );
 
-	SetFlags(iEmitter);
+	SetFlags( iEmitter );
 	SDKHook( iEmitter, SDKHook_SetTransmit, Hook_RadialParticle );
 
 	DispatchSpawn( iEmitter );
@@ -1011,64 +1012,6 @@ Action Timer_RadialHeal( Handle hTimer, int iPlayer ) {
 	return Plugin_Continue;
 }
 
-void CreatePatientRadialParticles( int iPlayer ) {
-	RemovePatientRadialParticles( iPlayer );
-
-	int iDisguise = GetEntProp( iPlayer, Prop_Send, "m_nDisguiseTeam" );
-	int iTeam;
-	if( iDisguise != 0 )
-		iTeam = iDisguise - 2;
-	else
-		iTeam = GetEntProp( iPlayer, Prop_Send, "m_iTeamNum" ) - 2;
-
-	int iEmitter = CreateEntityByName( "info_particle_system" );
-
-	DispatchKeyValue( iEmitter, "effect_name", g_szOathHealParticles[ iTeam ] );
-
-	float vecPos[3]; GetClientAbsOrigin( iPlayer, vecPos );
-	TeleportEntity( iEmitter, vecPos );
-
-	ParentModel( iEmitter, iPlayer );
-
-	SetEntPropEnt( iEmitter, Prop_Send, "m_hOwnerEntity", iPlayer );
-
-	SetFlags(iEmitter);
-	SDKHook( iEmitter, SDKHook_SetTransmit, Hook_RadialParticle );
-
-	DispatchSpawn( iEmitter );
-	ActivateEntity( iEmitter );
-	AcceptEntityInput( iEmitter, "Start" );
-
-	g_iRadialPatientEmitters[ iPlayer ] = EntIndexToEntRef( iEmitter );
-}
-void UpdatePatientRadialParticles( int iPlayer ) {
-	bool bHasHealer = ( g_iRadialPatientBits[ iPlayer ][0] != 0 || g_iRadialPatientBits[ iPlayer ][1] != 0 );
-	if( bHasHealer != g_bRadialPatientHealed[ iPlayer ] ) {
-		if( bHasHealer )
-			CreatePatientRadialParticles( iPlayer );
-		else
-			RemovePatientRadialParticles( iPlayer );
-	}
-	g_bRadialPatientHealed[ iPlayer ] = bHasHealer;
-}
-void RemovePatientRadialParticles( int iPlayer ) {
-	int iEmitter = EntRefToEntIndex( g_iRadialPatientEmitters[ iPlayer ] );
-	if( iEmitter != -1 )
-		RemoveEntity( iEmitter );
-
-	g_iRadialPatientEmitters[ iPlayer ] = -1;
-}
-
-Action Hook_RadialParticle( int iEntity, int iClient ) {
-	SetFlags( iEntity );
-	int iOwner = GetEntPropEnt( iEntity, Prop_Send, "m_hOwnerEntity" );
-
-	if( iClient == iOwner ) {
-		return Plugin_Handled;
-	}
-	return Plugin_Continue;
-}
-
 MRESReturn Hook_ProjectileSpeed( int iThis, DHookReturn hReturn ) {
 	//vtable 442
 }
@@ -1091,8 +1034,6 @@ void OathbreakerDamageMult( int iTarget, TFDamageInfo tfInfo ) {
 
 MRESReturn Detour_CoilTouch( int iThis, DHookParam hParams ) {
 	int iOther = hParams.Get( 1 );
-
-	//StoreToEntity( iThis, 1204, 69.0, NumberType_Int32 );
 
 	if( !IsValidPlayer( iOther ) )
 		return MRES_Ignored;
@@ -1127,8 +1068,6 @@ MRESReturn Detour_CoilTouch( int iThis, DHookParam hParams ) {
 	eHealEvent.SetInt( "healer", GetClientUserId( iOwner ) );
 	eHealEvent.SetInt( "amount", iGave );
 	eHealEvent.Fire();
-
-	//EmitGameSoundToAll( "HealthKit.Touch", iOther );
 
 	return MRES_Handled;
 }
