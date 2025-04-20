@@ -1,3 +1,3 @@
-VSCond = {}
-IncludeScript("scripted_conds.nut", VSCond )
-//s
+IncludeScript("math.nut")
+IncludeScript("util.nut")
+IncludeScript("scripted_conds.nut")
