@@ -287,6 +287,12 @@ MRESReturn Hook_UnfortunateSonAltFire( int iThis ) {
 	//adding latentcy prevents animation bugs
 	SetEntPropFloat( iThis, Prop_Send, "m_flTimeWeaponIdle", GetGameTime() + 0.7 - GetClientAvgLatency( iOwner, NetFlow_Both ) );
 	
+	static char szSoundStr[64] = "";
+	if( AttribHookString( szSoundStr, sizeof(szSoundStr), iThis, "custom_unfortunate_son_sound" ) )
+	{
+		if()
+	}
+
 	EmitSoundToAll( g_szUnderbarrelFireSound, iOwner, SNDCHAN_WEAPON );
 
 	float vecSrc[3], vecEyeAng[3], vecVel[3], vecImpulse[3];
